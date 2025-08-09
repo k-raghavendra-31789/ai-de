@@ -136,8 +136,8 @@ const initialState = createInitialState();
 
 // Reducer
 const appStateReducer = (state, action) => {
-  console.log('AppState Reducer:', action.type, action.payload);
-  console.log('Current openFolders count:', Array.isArray(state.openFolders) ? state.openFolders.length : 'not array');
+  // console.log('AppState Reducer:', action.type, action.payload);
+  // console.log('Current openFolders count:', Array.isArray(state.openFolders) ? state.openFolders.length : 'not array');
   
   switch (action.type) {
     // File Management

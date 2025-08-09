@@ -81,10 +81,10 @@ const FileExplorer = forwardRef(({ selectedFile, setSelectedFile, width, onFileR
     // This function will be called on component mount to help users reconnect
     // folders that were persisted but lost their file handles
     if (openFolders.length > 0) {
-      console.log('Current openFolders:', openFolders);
+  // console.log('Current openFolders:', openFolders);
       const foldersWithoutHandles = openFolders.filter(folder => !folder.handle);
       if (foldersWithoutHandles.length > 0) {
-        console.log(`Found ${foldersWithoutHandles.length} folders without file handles. These will need to be reconnected.`);
+  // console.log(`Found ${foldersWithoutHandles.length} folders without file handles. These will need to be reconnected.`);
         // You could show a notification here asking users to reconnect folders
       }
     }
@@ -797,7 +797,7 @@ const FileExplorer = forwardRef(({ selectedFile, setSelectedFile, width, onFileR
     try {
       // In a real implementation, this would call the respective cloud provider APIs
       // For now, most folders are already loaded with mock data
-      console.log(`Loading cloud folder children for ${provider}: ${folderPath}`);
+  // console.log(`Loading cloud folder children for ${provider}: ${folderPath}`);
     } catch (error) {
       console.error('Error loading cloud folder children:', error);
       alert(`Error loading folder: ${error.message}`);
@@ -1201,7 +1201,7 @@ const FileExplorer = forwardRef(({ selectedFile, setSelectedFile, width, onFileR
       // Clean up
       URL.revokeObjectURL(url);
       
-      console.log(`Successfully downloaded: ${cleanFileName}`);
+  // console.log(`Successfully downloaded: ${cleanFileName}`);
       
     } catch (error) {
       console.error('Error downloading file:', error);
@@ -1325,8 +1325,8 @@ const FileExplorer = forwardRef(({ selectedFile, setSelectedFile, width, onFileR
 
   // Toggle folder expansion (enhanced for GitHub and Cloud)
   const toggleFolder = async (folderId, folderHandle, isLoaded, isGitHub = false, folderPath = '', repoInfo = null, isCloud = false, cloudProvider = '') => {
-    console.log('toggleFolder called:', { folderId, folderHandle: !!folderHandle, isLoaded, isGitHub, isCloud });
-    console.log('Current openFolders before toggle:', openFolders);
+  // console.log('toggleFolder called:', { folderId, folderHandle: !!folderHandle, isLoaded, isGitHub, isCloud });
+  // console.log('Current openFolders before toggle:', openFolders);
     
     const isExpanded = expandedFolders.has(folderId);
     
@@ -1340,7 +1340,7 @@ const FileExplorer = forwardRef(({ selectedFile, setSelectedFile, width, onFileR
       
       // Expanding - load children if not already loaded
       if (!isLoaded) {
-        console.log('Loading children for folder:', folderId);
+  // console.log('Loading children for folder:', folderId);
         if (isGitHub && repoInfo) {
           await loadGitHubFolderChildren(folderId, folderPath, repoInfo);
         } else if (isCloud && cloudProvider) {
@@ -1358,7 +1358,7 @@ const FileExplorer = forwardRef(({ selectedFile, setSelectedFile, width, onFileR
       setExpandedFolders(newExpandedFolders);
     }
     
-    console.log('Current openFolders after toggle:', openFolders);
+  // console.log('Current openFolders after toggle:', openFolders);
   };
 
   // Handle file drag start (enhanced for GitHub and Cloud)

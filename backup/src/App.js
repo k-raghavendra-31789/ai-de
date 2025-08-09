@@ -215,6 +215,7 @@ const VSCodeInterface = () => {
           <div style={{ width: rightPanelWidth }} className="flex-shrink-0 overflow-hidden h-full">
             <ChatPanel 
               width={rightPanelWidth}
+              getAllAvailableFiles={getAllAvailableFiles}
             />
           </div>
         </div>

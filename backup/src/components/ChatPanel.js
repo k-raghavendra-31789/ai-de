@@ -1,38 +1,257 @@
-import React from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { useTheme } from './ThemeContext';
 import { useAppState } from '../contexts/AppStateContext';
 import CustomScrollbar from './CustomScrollbar';
 
-const ChatPanel = ({ width }) => {
+const ChatPanel = ({ width, getAllAvailableFiles }) => {
   const { colors } = useTheme();
   const { state, actions } = useAppState();
   
   const { chatInput, selectedLLM, availableFiles, openTabs, excelFiles } = state;
   const { setChatInput, setSelectedLLM } = actions;
   
+  // @mention detection state
+  const [showMentionDropdown, setShowMentionDropdown] = useState(false);
+  const [mentionType, setMentionType] = useState(''); // 'file', 'context', 'code'
+  const [mentionSuggestions, setMentionSuggestions] = useState([]);
+  const [dropdownPosition, setDropdownPosition] = useState({ top: 0, left: 0 });
+  const [selectedMentions, setSelectedMentions] = useState([]); // Array of selected files/mentions
+  const textareaRef = useRef(null);
+  
+  // @mention detection function
+  const detectMention = (text, cursorPosition) => {
+    const beforeCursor = text.substring(0, cursorPosition);
+    const mentionMatch = beforeCursor.match(/@(\w*)$/);
+    
+    if (mentionMatch) {
+      const mentionText = mentionMatch[1].toLowerCase();
+      
+      // Check for specific mention types
+      if ('file'.startsWith(mentionText) || mentionText === '') {
+        return { type: 'file', partial: mentionText };
+      } else if ('context'.startsWith(mentionText)) {
+        return { type: 'context', partial: mentionText };
+      } else if ('code'.startsWith(mentionText)) {
+        return { type: 'code', partial: mentionText };
+      }
+    }
+    
+    return null;
+  };
+
+  // Handle mention selection from dropdown
+  const handleMentionSelect = (selectedFile) => {
+    // Check for duplicates
+    const isDuplicate = selectedMentions.some(mention => 
+      mention.name === selectedFile.name && mention.type === selectedFile.type
+    );
+    
+    if (isDuplicate) {
+      // Subtle notification for duplicate
+      const tempAlert = document.createElement('div');
+      tempAlert.textContent = `"${selectedFile.name}" is already selected`;
+      tempAlert.className = 'fixed top-4 right-4 bg-yellow-100 border border-yellow-400 text-yellow-800 px-3 py-2 rounded text-sm z-[9999]';
+      document.body.appendChild(tempAlert);
+      
+      // Remove notification after 2 seconds
+      setTimeout(() => {
+        if (document.body.contains(tempAlert)) {
+          document.body.removeChild(tempAlert);
+        }
+      }, 2000);
+      
+      setShowMentionDropdown(false);
+      return;
+    }
+    
+    // Add the selected file to mentions array
+    const mention = {
+      id: `${selectedFile.name}-${selectedFile.type}-${Date.now()}-${Math.random()}`, // Ensure unique ID
+      name: selectedFile.name,
+      path: selectedFile.path,
+      type: selectedFile.type,
+      source: selectedFile.source,
+      isGitHub: selectedFile.isGitHub,
+      isCloud: selectedFile.isCloud
+    };
+    
+    setSelectedMentions(prev => [...prev, mention]);
+    
+    // Remove the @mention text from input and close dropdown
+    const textarea = textareaRef.current;
+    if (textarea) {
+      const text = textarea.value;
+      const cursorPosition = textarea.selectionStart;
+      const beforeCursor = text.substring(0, cursorPosition);
+      const afterCursor = text.substring(cursorPosition);
+      
+      // Find and remove the @mention pattern
+      const mentionMatch = beforeCursor.match(/@\w*$/);
+      if (mentionMatch) {
+        const newText = beforeCursor.substring(0, mentionMatch.index) + afterCursor;
+        setChatInput(newText);
+        
+        // Set cursor position after the replacement
+        setTimeout(() => {
+          textarea.focus();
+          textarea.setSelectionRange(mentionMatch.index, mentionMatch.index);
+        }, 0);
+      }
+    }
+    
+    setShowMentionDropdown(false);
+  };
+
+  // Remove a selected mention
+  const removeMention = (mentionId) => {
+    setSelectedMentions(prev => prev.filter(m => m.id !== mentionId));
+  };
+
+  // Generate suggestions based on mention type
+  const generateSuggestions = (type) => {
+    // Get fresh files from FileExplorer
+    const allFiles = getAllAvailableFiles ? getAllAvailableFiles() : (availableFiles || []);
+    
+    switch (type) {
+      case 'file':
+        // Return all files from FileExplorer
+        return allFiles.map(file => ({
+          name: file.name,
+          path: file.path,
+          source: file.source,
+          type: 'file',
+          isGitHub: file.isGitHub,
+          isCloud: file.isCloud,
+          id: file.id
+        }));
+        
+      case 'context':
+        // Filter to Excel/CSV files AND code files (.py, .sql, .ipynb, .dbc)
+        return allFiles
+          .filter(file => {
+            const ext = file.name.split('.').pop()?.toLowerCase();
+            return ['xlsx', 'xls', 'xlsm', 'csv', 'py', 'sql', 'ipynb', 'dbc'].includes(ext);
+          })
+          .map(file => ({
+            name: file.name,
+            path: file.path,
+            source: file.source,
+            type: 'context',
+            isGitHub: file.isGitHub,
+            isCloud: file.isCloud,
+            id: file.id
+          }));
+          
+      case 'code':
+        // Filter to code files: .py, .sql, .ipynb, .dbc
+        return allFiles
+          .filter(file => {
+            const ext = file.name.split('.').pop()?.toLowerCase();
+            return ['py', 'sql', 'ipynb', 'dbc'].includes(ext);
+          })
+          .map(file => ({
+            name: file.name,
+            path: file.path,
+            source: file.source,
+            type: 'code',
+            isGitHub: file.isGitHub,
+            isCloud: file.isCloud,
+            id: file.id
+          }));
+          
+      default:
+        return [];
+    }
+  };
+
   const handleSendMessage = () => {
-    if (chatInput.trim()) {
+    if (chatInput.trim() || selectedMentions.length > 0) {
+      // Prepare message with attachments
+      const messageData = {
+        message: chatInput.trim(),
+        attachments: selectedMentions.map(mention => ({
+          fileType: mention.type,
+          name: mention.name,
+          path: mention.path,
+          source: mention.source,
+          isGitHub: mention.isGitHub,
+          isCloud: mention.isCloud
+        })),
+        timestamp: new Date().toISOString()
+      };
+      
       // Handle message sending logic here
-      console.log('Sending message:', chatInput);
+      console.log('Sending message with data:', messageData);
+      
+      // Clear input and mentions
       setChatInput('');
+      setSelectedMentions([]);
     }
   };
 
   const handleKeyPress = (e) => {
+    if (e.key === 'Escape' && showMentionDropdown) {
+      setShowMentionDropdown(false);
+      return;
+    }
+    
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      handleSendMessage();
+      if (showMentionDropdown) {
+        setShowMentionDropdown(false);
+      } else {
+        handleSendMessage();
+      }
     }
   };
 
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (textareaRef.current && !textareaRef.current.contains(event.target)) {
+        // Check if click is inside dropdown
+        const dropdown = event.target.closest('[data-mention-dropdown]');
+        if (!dropdown) {
+          setShowMentionDropdown(false);
+        }
+      }
+    };
+
+    if (showMentionDropdown) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [showMentionDropdown]);
+
   const handleTextareaChange = (e) => {
-    setChatInput(e.target.value);
+    const newValue = e.target.value;
+    const cursorPosition = e.target.selectionStart;
+    
+    setChatInput(newValue);
     
     // Auto-resize textarea
     const textarea = e.target;
     textarea.style.height = 'auto';
     const newHeight = Math.min(Math.max(textarea.scrollHeight, 36), 150);
     textarea.style.height = newHeight + 'px';
+    
+    // Check for @mention detection
+    const mention = detectMention(newValue, cursorPosition);
+    
+    if (mention) {
+      setMentionType(mention.type);
+      setMentionSuggestions(generateSuggestions(mention.type));
+      setShowMentionDropdown(true);
+      
+      // Calculate dropdown position (we'll improve this later)
+      const rect = textarea.getBoundingClientRect();
+      setDropdownPosition({
+        top: rect.bottom + 5,
+        left: rect.left
+      });
+    } else {
+      setShowMentionDropdown(false);
+    }
   };
 
   return (
@@ -77,11 +296,43 @@ const ChatPanel = ({ width }) => {
       </CustomScrollbar>
 
       {/* Chat Input */}
-      <div className={`p-4 ${colors.border} border-t`}>
+      <div className={`p-4 ${colors.border} border-t relative`}>
         <div className={`${colors.tertiary} rounded-lg p-3`}>
           <div className="flex flex-col">
+            {/* Selected mentions display */}
+            {selectedMentions.length > 0 && (
+              <div className="flex flex-wrap gap-2 mb-3 pb-2 border-b border-opacity-20" style={{ borderColor: colors.border }}>
+                {selectedMentions.map((mention) => (
+                  <div
+                    key={mention.id}
+                    className={`inline-flex items-center px-2 py-1 rounded text-xs font-medium ${colors.accent} border ${colors.border}`}
+                    style={{
+                      fontStyle: 'italic',
+                      background: 'rgba(30, 41, 59, 0.85)', // dark slate with opacity
+                      color: 'inherit',
+                      marginRight: '0.4rem',
+                      marginBottom: '0.2rem',
+                      transition: 'background 0.2s'
+                    }}
+                  >
+                    <span style={{ whiteSpace: 'nowrap' }}>
+                      @{mention.type}[{mention.name}]
+                    </span>
+                    <button
+                      onClick={() => removeMention(mention.id)}
+                      className="ml-2 hover:bg-gray-300 rounded-full w-4 h-4 flex items-center justify-center text-xs font-bold"
+                      style={{ color: 'inherit', background: 'none', border: 'none', padding: 0, marginLeft: 6, cursor: 'pointer' }}
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            
             {/* Textarea - Full width */}
             <textarea
+              ref={textareaRef}
               value={chatInput}
               onChange={handleTextareaChange}
               onKeyPress={handleKeyPress}
@@ -128,9 +379,9 @@ const ChatPanel = ({ width }) => {
               <div className="flex items-center space-x-2">
                 <button 
                   onClick={handleSendMessage}
-                  disabled={!chatInput.trim()}
+                  disabled={!chatInput.trim() && selectedMentions.length === 0}
                   className={`px-4 py-2 rounded-md text-sm font-medium transition-all duration-200 ${
-                    chatInput.trim() 
+                    (chatInput.trim() || selectedMentions.length > 0)
                       ? `${colors.accent} hover:opacity-80 text-white` 
                       : `${colors.quaternary} ${colors.textMuted} cursor-not-allowed`
                   }`}
@@ -141,6 +392,58 @@ const ChatPanel = ({ width }) => {
             </div>
           </div>
         </div>
+        
+        {/* @mention dropdown */}
+        {showMentionDropdown && (
+          <div 
+            data-mention-dropdown="true"
+            className={`absolute z-50 ${colors.secondary} ${colors.border} border rounded-lg shadow-lg mt-1 min-w-[250px] max-h-[200px] overflow-y-auto`}
+            style={{
+              top: 'auto',
+              bottom: '100%',
+              left: '1rem',
+              marginBottom: '0.5rem'
+            }}
+          >
+            <div className={`p-2 text-xs ${colors.textSecondary} border-b ${colors.borderLight}`}>
+              @{mentionType} suggestions ({mentionSuggestions.length} files):
+            </div>
+            {mentionSuggestions.length > 0 ? (
+              mentionSuggestions.map((suggestion, index) => (
+                <div 
+                  key={suggestion.id || index}
+                  className={`p-2 text-sm ${colors.text} hover:${colors.hover} cursor-pointer border-b ${colors.borderLight} last:border-b-0`}
+                  onMouseDown={(e) => {
+                    e.preventDefault(); // Prevent textarea from losing focus
+                    handleMentionSelect(suggestion);
+                  }}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    handleMentionSelect(suggestion);
+                  }}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="truncate flex-1">{suggestion.name}</span>
+                    <span className={`text-xs ${colors.textMuted} ml-2`}>
+                      {suggestion.source === 'github' ? '📁' : 
+                       suggestion.source === 'cloud' ? '☁️' : '💻'}
+                    </span>
+                  </div>
+                  {suggestion.path !== suggestion.name && (
+                    <div className={`text-xs ${colors.textMuted} truncate mt-1`}>
+                      {suggestion.path}
+                    </div>
+                  )}
+                </div>
+              ))
+            ) : (
+              <div className={`p-3 text-sm ${colors.textMuted} text-center`}>
+                No {mentionType} files found
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
