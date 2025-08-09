@@ -1,9 +1,17 @@
 import React, { useState } from 'react';
 import { useTheme } from './ThemeContext';
+import { useAppState } from '../contexts/AppStateContext';
 import CustomScrollbar from './CustomScrollbar';
 
-const TerminalPanel = ({ height, isVisible, onToggle }) => {
+const TerminalPanel = () => {
   const { colors } = useTheme();
+  const { state, actions } = useAppState();
+  
+  // Get terminal state from context
+  const { panelSizes, isTerminalVisible } = state;
+  const { toggleTerminal } = actions;
+  const height = panelSizes.bottomPanelHeight;
+  
   const [activeTab, setActiveTab] = useState('data');
   const [dataTabs, setDataTabs] = useState([
     { id: 'data', label: 'Data', icon: '📊' }
@@ -132,7 +140,7 @@ const TerminalPanel = ({ height, isVisible, onToggle }) => {
         {/* Simple close button */}
         {!isCollapsed && (
           <button
-            onClick={onToggle}
+            onClick={toggleTerminal}
             className={`ml-auto px-3 py-2 text-lg ${colors.textSecondary} hover:${colors.text} hover:bg-gray-600 rounded`}
             title="Close panel"
           >

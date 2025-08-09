@@ -1,28 +1,146 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useRef, useEffect, useCallback } from 'react';
 import { ThemeProvider, useTheme } from './components/ThemeContext';
+import { AppStateProvider, useAppState } from './contexts/AppStateContext';
 import FileExplorer from './components/FileExplorer';
 import MainEditor from './components/MainEditor';
 import ChatPanel from './components/ChatPanel';
 import TerminalPanel from './components/TerminalPanel';
 import ResizeHandle from './components/ResizeHandle';
-import { useResizable } from './components/useResizable';
 
 const VSCodeInterface = () => {
-  const [selectedFile, setSelectedFile] = useState(null);
-  const [chatInput, setChatInput] = useState('');
   const { theme, colors } = useTheme();
+  const { state, actions } = useAppState();
   
+  // Extract state from context
   const {
-    containerRef,
-    leftPanelWidth,
-    rightPanelWidth,
-    bottomPanelHeight,
-    isTerminalVisible,
-    handleLeftMouseDown,
-    handleRightMouseDown,
-    handleBottomMouseDown,
-    toggleTerminal,
-  } = useResizable();
+    selectedFile,
+    availableFiles,
+    openTabs,
+    excelFiles,
+    chatInput,
+    panelSizes,
+    isTerminalVisible
+  } = state;
+  
+  // Extract actions from context
+  const {
+    setSelectedFile,
+    setAvailableFiles,
+    updateTabs,
+    setExcelData,
+    setChatInput,
+    setPanelSizes,
+    toggleTerminal
+  } = actions;
+  
+  const fileExplorerRef = useRef(null);
+  const containerRef = useRef(null);
+  
+  // Extract panel sizes from context
+  const { leftPanelWidth, rightPanelWidth, bottomPanelHeight } = panelSizes;
+
+  // Simple resize handlers
+  const handleLeftMouseDown = useCallback((e) => {
+    e.preventDefault();
+    actions.setResizing(true);
+    
+    const handleMouseMove = (e) => {
+      const newWidth = Math.max(200, Math.min(600, e.clientX));
+      actions.setPanelSizes({ leftPanelWidth: newWidth });
+    };
+    
+    const handleMouseUp = () => {
+      actions.setResizing(false);
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+    
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+  }, [actions]);
+
+  const handleRightMouseDown = useCallback((e) => {
+    e.preventDefault();
+    actions.setResizing(true);
+    
+    const handleMouseMove = (e) => {
+      const containerWidth = containerRef.current?.offsetWidth || 1200;
+      const newWidth = Math.max(300, Math.min(800, containerWidth - e.clientX));
+      actions.setPanelSizes({ rightPanelWidth: newWidth });
+    };
+    
+    const handleMouseUp = () => {
+      actions.setResizing(false);
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+    
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+  }, [actions]);
+
+  const handleBottomMouseDown = useCallback((e) => {
+    e.preventDefault();
+    actions.setResizing(true);
+    
+    const handleMouseMove = (e) => {
+      const containerHeight = containerRef.current?.offsetHeight || 800;
+      const newHeight = Math.max(100, Math.min(400, containerHeight - e.clientY));
+      actions.setPanelSizes({ bottomPanelHeight: newHeight });
+    };
+    
+    const handleMouseUp = () => {
+      actions.setResizing(false);
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+    
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+  }, [actions]);
+
+  // Function to get all files from FileExplorer
+  const getAllAvailableFiles = () => {
+    if (fileExplorerRef.current && fileExplorerRef.current.getAllFiles) {
+      return fileExplorerRef.current.getAllFiles();
+    }
+    return [];
+  };
+
+  // Function to get open tabs from MainEditor
+  const getOpenTabs = () => {
+    if (mainEditorRef.current && mainEditorRef.current.getOpenTabs) {
+      return mainEditorRef.current.getOpenTabs();
+    }
+    return openTabs;
+  };
+
+  // Function to get Excel files from MainEditor
+  const getExcelFiles = () => {
+    if (mainEditorRef.current && mainEditorRef.current.getExcelFiles) {
+      return mainEditorRef.current.getExcelFiles();
+    }
+    return excelFiles;
+  };
+
+  // Update open tabs when they change in MainEditor
+  useEffect(() => {
+    const updateOpenTabs = () => {
+      const tabs = getOpenTabs();
+      const excel = getExcelFiles();
+      updateTabs(tabs);
+      setExcelData(excel);
+    };
+    
+    // Update tabs periodically or when MainEditor changes
+    const interval = setInterval(updateOpenTabs, 1000);
+    return () => clearInterval(interval);
+  }, [updateTabs, setExcelData]);
+
+  // Update available files when FileExplorer changes
+  const handleFilesUpdate = useCallback((files) => {
+    setAvailableFiles(files);
+  }, [setAvailableFiles]);
 
   const handleFileOpen = (fileName) => {
     // Update the selected file when a file is opened via drag and drop
@@ -55,7 +173,7 @@ const VSCodeInterface = () => {
 
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [toggleTerminal]);
+  }, []); // Empty dependency array since toggleTerminal doesn't need to be reactive
 
   return (
     <div 
@@ -70,6 +188,8 @@ const VSCodeInterface = () => {
         width={leftPanelWidth}
         onFileRenamed={handleFileRenamed}
         onFileDeleted={handleFileDeleted}
+        onFilesUpdate={handleFilesUpdate}
+        ref={fileExplorerRef}
       />
       
       <ResizeHandle onMouseDown={handleLeftMouseDown} orientation="vertical" />
@@ -79,7 +199,7 @@ const VSCodeInterface = () => {
         {/* Top section - MainEditor and ChatPanel */}
         <div 
           className="flex overflow-hidden"
-          style={{ height: bottomPanelHeight === 0 ? '100%' : `calc(100vh - ${bottomPanelHeight}px - 1px)` }}
+          style={{ height: !isTerminalVisible ? '100%' : `calc(100% - ${bottomPanelHeight}px - 1px)` }}
         >
           <div className="flex-1 overflow-hidden">
             <MainEditor 
@@ -94,8 +214,6 @@ const VSCodeInterface = () => {
           
           <div style={{ width: rightPanelWidth }} className="flex-shrink-0 overflow-hidden h-full">
             <ChatPanel 
-              chatInput={chatInput}
-              setChatInput={setChatInput}
               width={rightPanelWidth}
             />
           </div>
@@ -108,11 +226,7 @@ const VSCodeInterface = () => {
             <ResizeHandle onMouseDown={handleBottomMouseDown} orientation="horizontal" />
             
             {/* Bottom Terminal panel - spans full width of right side */}
-            <TerminalPanel 
-              height={bottomPanelHeight} 
-              isVisible={isTerminalVisible}
-              onToggle={toggleTerminal}
-            />
+            <TerminalPanel />
           </>
         )}
         
@@ -139,7 +253,9 @@ const VSCodeInterface = () => {
 export default function App() {
   return (
     <ThemeProvider>
-      <VSCodeInterface />
+      <AppStateProvider>
+        <VSCodeInterface />
+      </AppStateProvider>
     </ThemeProvider>
   );
 }
