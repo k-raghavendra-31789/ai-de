@@ -2,15 +2,23 @@ import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { useTheme } from './ThemeContext';
 import * as XLSX from 'xlsx';
 
-const ExcelViewer = ({ file, fileContent }) => {
+const ExcelViewer = ({ file, fileContent, initialActiveSheet, sheetNames: propSheetNames, onSheetChange }) => {
   const { colors } = useTheme();
   const [workbook, setWorkbook] = useState(null);
-  const [activeSheet, setActiveSheet] = useState('');
+  const [activeSheet, setActiveSheet] = useState(initialActiveSheet || '');
   const [sheetData, setSheetData] = useState([]);
   const [originalSheetData, setOriginalSheetData] = useState([]); // Store original data
-  const [sheetNames, setSheetNames] = useState([]);
+  const [sheetNames, setSheetNames] = useState(propSheetNames || []);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const prevFileContentRef = useRef(null);
+  const prevFileNameRef = useRef(null);
+  
+  // Create storage key for this specific Excel file (without sheet name)
+  const fileStorageKey = useMemo(() => {
+    const identifier = file?.tabId || file?.name || 'excel-file';
+    return `excel_${identifier.toString().replace(/[^a-zA-Z0-9]/g, '_')}`;
+  }, [file?.tabId, file?.name]);
   
   // Create unique storage keys based on tab ID, file name, and active sheet
   const storageKey = useMemo(() => {
@@ -70,16 +78,36 @@ const ExcelViewer = ({ file, fileContent }) => {
   }, [multiSelectFilters, storageKey]);
 
   useEffect(() => {
+    // Only reload if the file content or name actually changed
+    const hasContentChanged = prevFileContentRef.current !== fileContent;
+    const hasFileNameChanged = prevFileNameRef.current !== file?.name;
+    
+    if (!hasContentChanged && !hasFileNameChanged) {
+      console.log('ExcelViewer: Skipping reload - no changes detected');
+      return;
+    }
+    
+    console.log('ExcelViewer: Content or file changed, reloading...', {
+      hasContentChanged,
+      hasFileNameChanged,
+      fileName: file?.name,
+      hasContent: !!fileContent
+    });
+    
+    prevFileContentRef.current = fileContent;
+    prevFileNameRef.current = file?.name;
+
     const loadExcelFile = async () => {
       try {
         setLoading(true);
         setError(null);
 
-        console.log('ExcelViewer Debug:', {
+        console.log('ExcelViewer Debug - useEffect triggered:', {
           fileName: file?.name,
           tabId: file?.tabId,
           storageKey: storageKey,
-          hasFileContent: !!fileContent
+          hasFileContent: !!fileContent,
+          currentActiveSheet: activeSheet
         });
 
         // Clear any old storage keys that might conflict (cleanup for existing sessions)
@@ -126,10 +154,28 @@ const ExcelViewer = ({ file, fileContent }) => {
         const sheets = wb.SheetNames;
         setSheetNames(sheets);
         
-        // Set first sheet as active by default
+        // Set first sheet as active by default, or use provided active sheet
         if (sheets.length > 0) {
-          setActiveSheet(sheets[0]);
-          loadSheetData(wb, sheets[0], false); // Don't reset filters on initial load
+          // Use provided active sheet if it exists and is valid, otherwise use first sheet
+          const sheetToActivate = initialActiveSheet && sheets.includes(initialActiveSheet) 
+            ? initialActiveSheet 
+            : sheets[0];
+          
+          console.log('ExcelViewer: Setting active sheet to:', sheetToActivate, {
+            initialActiveSheet,
+            availableSheets: sheets,
+            fileStorageKey
+          });
+          
+          setActiveSheet(sheetToActivate);
+          setSheetNames(sheets);
+          
+          // Notify parent about sheet names and active sheet
+          if (onSheetChange) {
+            onSheetChange(sheetToActivate, sheets);
+          }
+          
+          loadSheetData(wb, sheetToActivate, false); // Don't reset filters on initial load
         }
       } catch (err) {
         console.error('Error loading Excel file:', err);
@@ -139,8 +185,21 @@ const ExcelViewer = ({ file, fileContent }) => {
       }
     };
 
-    loadExcelFile();
-  }, [file, fileContent]);
+    if (hasContentChanged || hasFileNameChanged) {
+      loadExcelFile();
+    }
+  }, [file?.name, fileContent]); // Only depend on name and content
+
+  // Update active sheet when prop changes (for switching between tabs)
+  useEffect(() => {
+    if (initialActiveSheet && initialActiveSheet !== activeSheet && sheetNames.includes(initialActiveSheet)) {
+      console.log('ExcelViewer: Updating active sheet from prop:', initialActiveSheet);
+      setActiveSheet(initialActiveSheet);
+      if (workbook) {
+        loadSheetData(workbook, initialActiveSheet, false);
+      }
+    }
+  }, [initialActiveSheet, activeSheet, sheetNames, workbook]);
 
   // Smart click-outside detection that ignores layout changes
   useEffect(() => {
@@ -233,8 +292,22 @@ const ExcelViewer = ({ file, fileContent }) => {
   }, [storageKey]);
 
   const handleSheetChange = (sheetName) => {
-    console.log('Changing sheet to:', sheetName);
+    console.log('ExcelViewer: handleSheetChange called:', {
+      newSheet: sheetName,
+      currentActiveSheet: activeSheet,
+      hasWorkbook: !!workbook,
+      sheetNames: sheetNames,
+      fileStorageKey
+    });
+    
+    // Update local state
     setActiveSheet(sheetName);
+    
+    // Notify parent component
+    if (onSheetChange) {
+      onSheetChange(sheetName, sheetNames);
+    }
+    
     if (workbook) {
       loadSheetData(workbook, sheetName, false); // Don't reset filters, let useEffect handle loading saved filters
     }

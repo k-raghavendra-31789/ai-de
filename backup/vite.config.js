@@ -40,5 +40,24 @@ export default defineConfig({
   },
   define: {
     global: 'globalThis',
+  },
+  test: {
+    globals: true,
+    environment: 'jsdom',
+    setupFiles: './src/test/setup.js',
+    css: true,
+    coverage: {
+      provider: 'v8',
+      reporter: ['text', 'html', 'lcov'],
+      exclude: [
+        'node_modules/',
+        'src/test/',
+        '**/*.test.js',
+        '**/*.config.js'
+      ]
+    },
+    define: {
+      global: 'globalThis',
+    }
   }
 });

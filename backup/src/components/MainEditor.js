@@ -1,5 +1,6 @@
-import React, { useState, useRef, useEffect, useCallback, useImperativeHandle, forwardRef } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useImperativeHandle, forwardRef, useMemo } from 'react';
 import { useTheme } from './ThemeContext';
+import { useAppState } from '../contexts/AppStateContext';
 import CustomScrollbar from './CustomScrollbar';
 import MonacoEditor from './MonacoEditor';
 import ExcelViewer from './ExcelViewer';
@@ -7,6 +8,11 @@ import { FaDownload } from 'react-icons/fa';
 
 const MainEditor = forwardRef(({ selectedFile, onFileOpen, isTerminalVisible }, ref) => {
   const { theme, toggleTheme, colors } = useTheme();
+  const { state, actions } = useAppState();
+  
+  // Get tab and Excel data from context
+  const { openTabs, excelFiles } = state;
+  const { updateTabs, setExcelData, updateExcelFile, setExcelActiveSheet } = actions;
   
   // CSS to hide textarea scrollbars
   useEffect(() => {
@@ -27,13 +33,8 @@ const MainEditor = forwardRef(({ selectedFile, onFileOpen, isTerminalVisible }, 
     };
   }, []);
 
-  const [openTabs, setOpenTabs] = useState([]);
-  
   // State to store content for each open file
   const [fileContents, setFileContents] = useState({});
-  
-  // State to store Excel file data
-  const [excelFiles, setExcelFiles] = useState({});
   
   // State to track deleted files (tabs that should show as deleted)
   const [deletedFiles, setDeletedFiles] = useState(new Set());
@@ -205,7 +206,9 @@ const MainEditor = forwardRef(({ selectedFile, onFileOpen, isTerminalVisible }, 
   // Expose methods to parent component
   useImperativeHandle(ref, () => ({
     handleFileRenamed: handleFileRenamed,
-    handleFileDeleted: handleFileDeleted
+    handleFileDeleted: handleFileDeleted,
+    getOpenTabs: () => openTabs,
+    getExcelFiles: () => excelFiles
   }));
 
   const saveFileContent = useCallback(async (fileName, content) => {
@@ -247,10 +250,11 @@ const MainEditor = forwardRef(({ selectedFile, onFileOpen, isTerminalVisible }, 
       await writable.close();
 
       // Mark file as clean (not dirty)
-      setOpenTabs(prev => prev.map(tab => ({
+      const cleanTabs = openTabs.map(tab => ({
         ...tab,
         isDirty: tab.name === fileName ? false : tab.isDirty
-      })));
+      }));
+      updateTabs(cleanTabs);
 
     } catch (error) {
       // If it's a stale handle error, try to get a fresh handle
@@ -276,10 +280,11 @@ const MainEditor = forwardRef(({ selectedFile, onFileOpen, isTerminalVisible }, 
             await writable.close();
             
             // Mark file as clean
-            setOpenTabs(prev => prev.map(tab => ({
+            const cleanTabs = openTabs.map(tab => ({
               ...tab,
               isDirty: tab.name === fileName ? false : tab.isDirty
-            })));
+            }));
+            updateTabs(cleanTabs);
           }
         } catch (retryError) {
           alert(`Failed to save ${fileName}. Please try dragging the file again to refresh the connection.`);
@@ -373,13 +378,10 @@ const MainEditor = forwardRef(({ selectedFile, onFileOpen, isTerminalVisible }, 
       
       if (isExcelFile(fileName)) {
         // Update existing Excel file content
-        setExcelFiles(prev => ({
-          ...prev,
-          [tabId]: {
-            content: content,
-            fileId: fileId
-          }
-        }));
+        updateExcelFile(tabId, {
+          content: content,
+          fileId: fileId
+        });
       } else {
         // Update existing text file content
         setFileContents(prev => ({
@@ -393,13 +395,10 @@ const MainEditor = forwardRef(({ selectedFile, onFileOpen, isTerminalVisible }, 
     // Handle Excel files differently
     if (isExcelFile(fileName)) {
       // Store Excel file data for the ExcelViewer
-      setExcelFiles(prev => ({
-        ...prev,
-        [tabId]: {
-          content: content,
-          fileId: fileId
-        }
-      }));
+      updateExcelFile(tabId, {
+        content: content,
+        fileId: fileId
+      });
     } else {
       // Set the file content directly from the provided content for text files
       setFileContents(prev => ({
@@ -417,10 +416,11 @@ const MainEditor = forwardRef(({ selectedFile, onFileOpen, isTerminalVisible }, 
       fileId: fileId // Store fileId for local file handle lookup
     };
 
-    setOpenTabs(prev => [
-      ...prev.map(tab => ({ ...tab, isActive: false })),
+    const updatedTabs = [
+      ...openTabs.map(tab => ({ ...tab, isActive: false })),
       newTab
-    ]);
+    ];
+    updateTabs(updatedTabs);
     
     // Notify parent component about file opening
     if (onFileOpen) {
@@ -443,7 +443,7 @@ const MainEditor = forwardRef(({ selectedFile, onFileOpen, isTerminalVisible }, 
     
     if (remainingTabs.length === 0) {
       // If no tabs left, just set empty tabs array (Welcome screen will show)
-      setOpenTabs([]);
+      updateTabs([]);
       return;
     }
 
@@ -453,14 +453,15 @@ const MainEditor = forwardRef(({ selectedFile, onFileOpen, isTerminalVisible }, 
       remainingTabs[remainingTabs.length - 1].isActive = true;
     }
 
-    setOpenTabs(remainingTabs);
+    updateTabs(remainingTabs);
   };
 
   const setActiveTab = (tabId) => {
-    setOpenTabs(prev => prev.map(tab => ({
+    const updatedTabs = openTabs.map(tab => ({
       ...tab,
       isActive: tab.id === tabId
-    })));
+    }));
+    updateTabs(updatedTabs);
   };
 
   const handleContentChange = (tabId, newContent) => {
@@ -471,10 +472,11 @@ const MainEditor = forwardRef(({ selectedFile, onFileOpen, isTerminalVisible }, 
     }));
 
     // Mark file as dirty
-    setOpenTabs(prev => prev.map(tab => ({
+    const updatedTabs = openTabs.map(tab => ({
       ...tab,
       isDirty: tab.id === tabId ? true : tab.isDirty
-    })));
+    }));
+    updateTabs(updatedTabs);
 
     // Debounced auto-save after 1 second of no typing
     if (saveTimeoutRef.current[tabId]) {
@@ -598,6 +600,42 @@ const MainEditor = forwardRef(({ selectedFile, onFileOpen, isTerminalVisible }, 
   };
 
   const activeTab = openTabs.find(tab => tab.isActive);
+
+  // Memoize Excel content to prevent unnecessary re-renders
+  const memoizedExcelContent = useMemo(() => {
+    const excelFile = activeTab && isExcelFile(activeTab.name) ? excelFiles[activeTab.id] : null;
+    console.log('MainEditor: Memoized Excel content changed for tab:', activeTab?.id, 'has content:', !!excelFile?.content);
+    return excelFile?.content || null;
+  }, [activeTab?.id, excelFiles[activeTab?.id]?.content, activeTab?.name]); // More specific dependency
+
+  // Memoize Excel metadata (activeSheet, sheetNames)
+  const memoizedExcelMeta = useMemo(() => {
+    const excelFile = activeTab && isExcelFile(activeTab.name) ? excelFiles[activeTab.id] : null;
+    return {
+      activeSheet: excelFile?.activeSheet,
+      sheetNames: excelFile?.sheetNames
+    };
+  }, [activeTab?.id, excelFiles[activeTab?.id]?.activeSheet, excelFiles[activeTab?.id]?.sheetNames]);
+
+  // Handle Excel sheet changes
+  const handleExcelSheetChange = useCallback((tabId, activeSheet, sheetNames) => {
+    setExcelActiveSheet(tabId, activeSheet, sheetNames);
+  }, [setExcelActiveSheet]);
+
+  // Memoize file handle to prevent unnecessary re-renders
+  const memoizedFileHandle = useMemo(() => {
+    return activeTab?.fileId ? window.fileHandleRegistry?.get(activeTab.fileId) : null;
+  }, [activeTab?.fileId]);
+
+  // Memoize file prop to prevent unnecessary re-renders
+  const memoizedFileProps = useMemo(() => {
+    if (!activeTab || !isExcelFile(activeTab.name)) return null;
+    return {
+      name: activeTab.name,
+      handle: memoizedFileHandle,
+      tabId: activeTab.id
+    };
+  }, [activeTab?.id, activeTab?.name, memoizedFileHandle]);
 
   return (
     <div className="flex-1 flex flex-col h-full overflow-hidden">
@@ -811,31 +849,24 @@ const MainEditor = forwardRef(({ selectedFile, onFileOpen, isTerminalVisible }, 
             {/* Full File Content Editor - Only this scrolls */}
             <div className={`flex-1 ${colors.primary} overflow-hidden`}>
               {activeTab && isExcelFile(activeTab.name) ? (
-                (() => {
-                  // Try to find Excel content using the tab ID
-                  let excelContent = excelFiles[activeTab.id]?.content;
-                  const fileHandle = window.fileHandleRegistry?.get(activeTab.fileId);
-                  
-                  return (
-                    <ExcelViewer
-                      file={{
-                        name: activeTab.name,
-                        handle: fileHandle,
-                        tabId: activeTab.id
-                      }}
-                      fileContent={excelContent}
-                    />
-                  );
-                })()
-              ) : (
+                <ExcelViewer
+                  key={`excel-${activeTab.id}`} // Unique key per Excel file to maintain separate state
+                  file={memoizedFileProps}
+                  fileContent={memoizedExcelContent}
+                  initialActiveSheet={memoizedExcelMeta.activeSheet}
+                  sheetNames={memoizedExcelMeta.sheetNames}
+                  onSheetChange={(activeSheet, sheetNames) => handleExcelSheetChange(activeTab.id, activeSheet, sheetNames)}
+                />
+              ) : activeTab ? (
                 <MonacoEditor
+                  key={activeTab?.id} // Force re-render when tab changes
                   value={fileContents[activeTab?.id] || ''}
                   onChange={(newValue) => handleContentChange(activeTab?.id, newValue)}
                   fileName={activeTab?.name}
                   onSave={(content) => saveFileContent(activeTab?.name, content)}
                   wordWrap={wordWrap}
                 />
-              )}
+              ) : null}
             </div>
           </div>
         )}

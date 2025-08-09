@@ -1,5 +1,6 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, forwardRef, useImperativeHandle, useCallback } from 'react';
 import { useTheme } from './ThemeContext';
+import { useAppState, ACTION_TYPES } from '../contexts/AppStateContext';
 import CustomScrollbar from './CustomScrollbar';
 import Tooltip from './Tooltip';
 import { 
@@ -32,11 +33,16 @@ import {
 // Global file handle registry to work around drag and drop limitations
 window.fileHandleRegistry = window.fileHandleRegistry || new Map();
 
-const FileExplorer = ({ selectedFile, setSelectedFile, width, onFileRenamed, onFileDeleted }) => {
+const FileExplorer = forwardRef(({ selectedFile, setSelectedFile, width, onFileRenamed, onFileDeleted, onFilesUpdate }, ref) => {
   const { colors } = useTheme();
-  const [openFolders, setOpenFolders] = useState([]);
+  const { state, actions } = useAppState();
+  
+  // Get folder state from Context
+  const { openFolders, expandedFolders } = state;
+  const { setOpenFolders, setExpandedFolders, addFolder, removeFolder, reconnectFolder } = actions;
+  
+  // Local UI state (non-persistent)
   const [isLoadingFiles, setIsLoadingFiles] = useState(false);
-  const [expandedFolders, setExpandedFolders] = useState(new Set());
   const [showCreateFileDialog, setShowCreateFileDialog] = useState(false);
   const [newFileName, setNewFileName] = useState('');
   const [selectedFolderForNewFile, setSelectedFolderForNewFile] = useState(null);
@@ -70,27 +76,72 @@ const FileExplorer = ({ selectedFile, setSelectedFile, width, onFileRenamed, onF
   
   const [activeTab, setActiveTab] = useState('local'); // 'local', 'github', or 'cloud'
 
+  // Helper function to restore file handles for persisted folders
+  const restoreFileHandles = useCallback(async () => {
+    // This function will be called on component mount to help users reconnect
+    // folders that were persisted but lost their file handles
+    if (openFolders.length > 0) {
+      console.log('Current openFolders:', openFolders);
+      const foldersWithoutHandles = openFolders.filter(folder => !folder.handle);
+      if (foldersWithoutHandles.length > 0) {
+        console.log(`Found ${foldersWithoutHandles.length} folders without file handles. These will need to be reconnected.`);
+        // You could show a notification here asking users to reconnect folders
+      }
+    }
+  }, [openFolders]);
+
+  // Effect to restore handles on mount
+  useEffect(() => {
+    restoreFileHandles();
+  }, [restoreFileHandles]);
+
+  // Refs to access current state values in event handlers
+  const stateRefs = useRef({
+    showCreateFileDialog: false,
+    showRenameDialog: false,
+    showDeleteDialog: false,
+    showGitHubDialog: false,
+    showCloudDialog: false,
+    showCloudConnectDialog: false,
+    openFolders: [],
+    isLoadingFiles: false
+  });
+
+  // Update refs when state changes
+  useEffect(() => {
+    stateRefs.current = {
+      showCreateFileDialog,
+      showRenameDialog,
+      showDeleteDialog,
+      showGitHubDialog,
+      showCloudDialog,
+      showCloudConnectDialog,
+      openFolders,
+      isLoadingFiles
+    };
+  });
+
   // Handle keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e) => {
       // Close context menu and dialogs on Escape
       if (e.key === 'Escape') {
         setContextMenu({ show: false, x: 0, y: 0, item: null });
-        if (showCreateFileDialog) {
+        if (stateRefs.current.showCreateFileDialog) {
           setShowCreateFileDialog(false);
           setNewFileName('');
           setSelectedFolderForNewFile(null);
         }
-        if (showRenameDialog) {
+        if (stateRefs.current.showRenameDialog) {
           setShowRenameDialog(false);
           setNewName('');
           setRenamingFile(null);
         }
-        if (showDeleteDialog) {
+        if (stateRefs.current.showDeleteDialog) {
           setShowDeleteDialog(false);
           setDeletingFile(null);
         }
-        if (showGitHubDialog) {
+        if (stateRefs.current.showGitHubDialog) {
           setShowGitHubDialog(false);
           setGitHubRepoUrl('');
           setGitHubToken('');
@@ -98,11 +149,11 @@ const FileExplorer = ({ selectedFile, setSelectedFile, width, onFileRenamed, onF
           setGitHubBranch('main');
           setFetchMode('repository');
         }
-        if (showCloudDialog) {
+        if (stateRefs.current.showCloudDialog) {
           setShowCloudDialog(false);
           setSelectedCloudProvider('onedrive');
         }
-        if (showCloudConnectDialog) {
+        if (stateRefs.current.showCloudConnectDialog) {
           setShowCloudConnectDialog(false);
         }
       }
@@ -110,7 +161,7 @@ const FileExplorer = ({ selectedFile, setSelectedFile, width, onFileRenamed, onF
       // Refresh workspace on F5 or Ctrl+R
       if (e.key === 'F5' || (e.ctrlKey && e.key === 'r')) {
         e.preventDefault();
-        if (openFolders.length > 0 && !isLoadingFiles) {
+        if (stateRefs.current.openFolders.length > 0 && !stateRefs.current.isLoadingFiles) {
           refreshWorkspace();
         }
       }
@@ -118,7 +169,7 @@ const FileExplorer = ({ selectedFile, setSelectedFile, width, onFileRenamed, onF
 
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [showCreateFileDialog, showRenameDialog, showDeleteDialog, showGitHubDialog, showCloudDialog, openFolders, isLoadingFiles]);
+  }, []); // Empty dependency array since we're just setting up event listeners
 
   // Cloud storage integration functions
   const cloudProviders = [
@@ -641,7 +692,8 @@ const FileExplorer = ({ selectedFile, setSelectedFile, width, onFileRenamed, onF
       });
 
       // Auto-expand the GitHub repo
-      setExpandedFolders(prev => new Set([...prev, gitHubFolder.id]));
+      const newExpandedFolders = new Set([...expandedFolders, gitHubFolder.id]);
+      setExpandedFolders(newExpandedFolders);
 
       // Reset form
       setShowGitHubDialog(false);
@@ -787,6 +839,33 @@ const FileExplorer = ({ selectedFile, setSelectedFile, width, onFileRenamed, onF
       throw error;
     }
   };
+  // Function to reconnect a folder that lost its handle
+  const handleReconnectFolder = async (folderId) => {
+    try {
+      setIsLoadingFiles(true);
+      
+      if ('showDirectoryPicker' in window) {
+        const dirHandle = await window.showDirectoryPicker();
+        
+        // Build new folder structure
+        const folderStructure = await buildFolderStructure(dirHandle);
+        
+        // Update the existing folder with new handle and structure using Context action
+        reconnectFolder(folderId, folderStructure);
+        
+      } else {
+        alert('Your browser does not support the File System Access API.');
+      }
+    } catch (error) {
+      if (error.name !== 'AbortError') {
+        console.error('Error reconnecting folder:', error);
+        alert('Failed to reconnect folder. Please try again.');
+      }
+    } finally {
+      setIsLoadingFiles(false);
+    }
+  };
+
   const addLocalFolder = async () => {
     try {
       setIsLoadingFiles(true);
@@ -804,11 +883,12 @@ const FileExplorer = ({ selectedFile, setSelectedFile, width, onFileRenamed, onF
         // Build the folder structure
         const folderStructure = await buildFolderStructure(dirHandle);
         
-        // Add to open folders
-        setOpenFolders(prev => [...prev, folderStructure]);
+        // Add to open folders using Context action
+        addFolder(folderStructure);
         
         // Auto-expand the root folder
-        setExpandedFolders(prev => new Set([...prev, folderStructure.id]));
+        const newExpandedFolders = new Set([...expandedFolders, folderStructure.id]);
+        setExpandedFolders(newExpandedFolders);
         
       } else {
         alert('Your browser does not support the File System Access API. Please use a modern browser like Chrome or Edge.');
@@ -847,6 +927,7 @@ const FileExplorer = ({ selectedFile, setSelectedFile, width, onFileRenamed, onF
         }
       }
       
+      // Use Context action instead of direct setter
       setOpenFolders(refreshedFolders);
       
       // Refresh any expanded folders
@@ -1218,10 +1299,9 @@ const FileExplorer = ({ selectedFile, setSelectedFile, width, onFileRenamed, onF
         }
       }
 
-      // Update the folder structure
-      setOpenFolders(prevFolders => 
-        updateFolderInTree(prevFolders, folderId, { children, isLoaded: true })
-      );
+      // Update the folder structure using Context action
+      const updatedFolders = updateFolderInTree(openFolders, folderId, { children, isLoaded: true });
+      setOpenFolders(updatedFolders);
     } catch (error) {
       console.error('Error loading folder children:', error);
     }
@@ -1245,11 +1325,22 @@ const FileExplorer = ({ selectedFile, setSelectedFile, width, onFileRenamed, onF
 
   // Toggle folder expansion (enhanced for GitHub and Cloud)
   const toggleFolder = async (folderId, folderHandle, isLoaded, isGitHub = false, folderPath = '', repoInfo = null, isCloud = false, cloudProvider = '') => {
+    console.log('toggleFolder called:', { folderId, folderHandle: !!folderHandle, isLoaded, isGitHub, isCloud });
+    console.log('Current openFolders before toggle:', openFolders);
+    
     const isExpanded = expandedFolders.has(folderId);
     
     if (!isExpanded) {
+      // Expanding - check if folder has access
+      if (!isGitHub && !isCloud && !folderHandle) {
+        // This is a persisted folder without file handle - cannot expand
+        console.warn('Cannot expand folder without file handle. User needs to reconnect first.');
+        return;
+      }
+      
       // Expanding - load children if not already loaded
       if (!isLoaded) {
+        console.log('Loading children for folder:', folderId);
         if (isGitHub && repoInfo) {
           await loadGitHubFolderChildren(folderId, folderPath, repoInfo);
         } else if (isCloud && cloudProvider) {
@@ -1258,15 +1349,16 @@ const FileExplorer = ({ selectedFile, setSelectedFile, width, onFileRenamed, onF
           await loadFolderChildren(folderId, folderHandle);
         }
       }
-      setExpandedFolders(prev => new Set([...prev, folderId]));
+      const newExpandedFolders = new Set([...expandedFolders, folderId]);
+      setExpandedFolders(newExpandedFolders);
     } else {
       // Collapsing
-      setExpandedFolders(prev => {
-        const newSet = new Set(prev);
-        newSet.delete(folderId);
-        return newSet;
-      });
+      const newExpandedFolders = new Set(expandedFolders);
+      newExpandedFolders.delete(folderId);
+      setExpandedFolders(newExpandedFolders);
     }
+    
+    console.log('Current openFolders after toggle:', openFolders);
   };
 
   // Handle file drag start (enhanced for GitHub and Cloud)
@@ -1444,18 +1536,18 @@ const FileExplorer = ({ selectedFile, setSelectedFile, width, onFileRenamed, onF
   };
 
   // Remove a folder from workspace (enhanced for GitHub)
-  const removeFolder = (folderId, isGitHub = false) => {
+  const removeFolderFromWorkspace = (folderId, isGitHub = false) => {
     if (isGitHub) {
       setGitHubRepos(prev => prev.filter(repo => repo.id !== folderId));
     } else {
-      setOpenFolders(prev => prev.filter(folder => folder.id !== folderId));
+      // Use Context action to remove folder
+      removeFolder(folderId);
     }
     
-    setExpandedFolders(prev => {
-      const newSet = new Set(prev);
-      newSet.delete(folderId);
-      return newSet;
-    });
+    // Update expanded folders state
+    const newExpandedFolders = new Set(expandedFolders);
+    newExpandedFolders.delete(folderId);
+    setExpandedFolders(newExpandedFolders);
   };
 
   // Helper function to get file extension and type info for tooltip
@@ -1503,28 +1595,48 @@ const FileExplorer = ({ selectedFile, setSelectedFile, width, onFileRenamed, onF
               : `Folder: ${item.name}`
           }>
             <div
-              onClick={() => toggleFolder(
-                item.id, 
-                item.handle, 
-                item.isLoaded, 
-                item.isGitHub,
-                item.path,
-                item.repoInfo
-              )}
+              onClick={() => {
+                // Prevent expansion if folder has no handle (needs reconnection)
+                if (!item.handle && !item.isGitHub && !item.isCloud) {
+                  return; // Do nothing - user needs to reconnect first
+                }
+                toggleFolder(
+                  item.id, 
+                  item.handle, 
+                  item.isLoaded, 
+                  item.isGitHub,
+                  item.path,
+                  item.repoInfo
+                );
+              }}
               onContextMenu={(e) => handleContextMenu(e, item)}
-              className={`flex items-center cursor-pointer hover:${colors.hover} p-1 rounded transition-colors text-sm`}
+              className={`flex items-center cursor-pointer hover:${colors.hover} p-1 rounded transition-colors text-sm ${!item.handle && !item.isGitHub ? 'opacity-60' : ''}`}
               style={{ paddingLeft }}
             >
-              <span className={`mr-1 text-xs ${colors.textMuted} transition-transform duration-200 ${isExpanded ? 'rotate-90' : ''}`}>
-                <svg 
-                  width="20" 
-                  height="20" 
-                  viewBox="0 0 16 16" 
-                  fill="currentColor"
-                  className="inline-block"
-                >
-                  <path d="M6 4l4 4-4 4V4z"/>
-                </svg>
+              <span className={`mr-1 text-xs ${colors.textMuted} transition-transform duration-200 ${isExpanded ? 'rotate-90' : ''} ${!item.handle && !item.isGitHub && !item.isCloud ? 'opacity-30' : ''}`}>
+                {!item.handle && !item.isGitHub && !item.isCloud ? (
+                  // Show lock icon for folders that need reconnection
+                  <svg 
+                    width="20" 
+                    height="20" 
+                    viewBox="0 0 16 16" 
+                    fill="currentColor"
+                    className="inline-block"
+                  >
+                    <path d="M8 1a2 2 0 0 1 2 2v4H6V3a2 2 0 0 1 2-2zm3 6V3a3 3 0 0 0-6 0v4a2 2 0 0 0-2 2v5a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z"/>
+                  </svg>
+                ) : (
+                  // Normal expand/collapse arrow
+                  <svg 
+                    width="20" 
+                    height="20" 
+                    viewBox="0 0 16 16" 
+                    fill="currentColor"
+                    className="inline-block"
+                  >
+                    <path d="M6 4l4 4-4 4V4z"/>
+                  </svg>
+                )}
               </span>
               <span className={`mr-2 ${colors.textMuted}`}>
                 {getFileIcon(item.name, 'folder', item.isGitHub, isExpanded)}
@@ -1533,11 +1645,24 @@ const FileExplorer = ({ selectedFile, setSelectedFile, width, onFileRenamed, onF
               {item.isGitHub && (
                 <FaGithub className={`text-xs ${colors.textMuted} mr-1`} title="GitHub Repository" />
               )}
+              {/* Show reconnect button for folders without handles */}
+              {depth === 0 && !item.handle && !item.isGitHub && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleReconnectFolder(item.id);
+                  }}
+                  className={`ml-1 text-xs bg-blue-500 hover:bg-blue-600 text-white px-2 py-0.5 rounded transition-colors`}
+                  title="Reconnect folder - File access was lost"
+                >
+                  Reconnect
+                </button>
+              )}
               {depth === 0 && (
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
-                    removeFolder(item.id, item.isGitHub);
+                    removeFolderFromWorkspace(item.id, item.isGitHub);
                   }}
                   className={`ml-1 text-xs ${colors.textMuted} hover:${colors.text} opacity-0 group-hover:opacity-100 transition-opacity px-1`}
                 >
@@ -1588,6 +1713,56 @@ const FileExplorer = ({ selectedFile, setSelectedFile, width, onFileRenamed, onF
       );
     }
   };
+
+  // Function to recursively collect all files from the file tree
+  const getAllFiles = () => {
+    const allFiles = [];
+    
+    // Helper function to traverse file tree
+    const traverseFiles = (items, source = 'local') => {
+      items.forEach(item => {
+        if (item.type === 'file') {
+          allFiles.push({
+            name: item.name,
+            path: item.path || item.name,
+            source: source,
+            id: item.id,
+            isGitHub: item.isGitHub || false,
+            isCloud: item.isCloud || false,
+            provider: item.provider || null,
+            repoInfo: item.repoInfo || null,
+            handle: item.handle || null
+          });
+        } else if (item.type === 'folder' && item.children) {
+          traverseFiles(item.children, source);
+        }
+      });
+    };
+    
+    // Collect from local files
+    traverseFiles(openFolders, 'local');
+    
+    // Collect from GitHub repos
+    traverseFiles(gitHubRepos, 'github');
+    
+    // Collect from cloud files
+    traverseFiles(cloudFiles, 'cloud');
+    
+    return allFiles;
+  };
+
+  // Expose methods to parent component
+  useImperativeHandle(ref, () => ({
+    getAllFiles: getAllFiles
+  }));
+
+  // Notify parent when files change
+  useEffect(() => {
+    if (onFilesUpdate) {
+      const files = getAllFiles();
+      onFilesUpdate(files);
+    }
+  }, [openFolders, gitHubRepos, cloudFiles]); // Remove onFilesUpdate from dependencies
 
   return (
     <div 
@@ -1693,11 +1868,15 @@ const FileExplorer = ({ selectedFile, setSelectedFile, width, onFileRenamed, onF
               </div>
             ) : (
               <div className={`${colors.textSecondary} space-y-1`}>
-                {openFolders.map(folder => (
+                {Array.isArray(openFolders) ? openFolders.map(folder => (
                   <React.Fragment key={folder.id}>
                     {renderFileTreeItem(folder)}
                   </React.Fragment>
-                ))}
+                )) : (
+                  <div className="text-red-500 text-sm p-2">
+                    Error: Folder data is corrupted. Please refresh and re-add folders.
+                  </div>
+                )}
               </div>
             )
           ) : activeTab === 'github' ? (
@@ -2243,6 +2422,6 @@ const FileExplorer = ({ selectedFile, setSelectedFile, width, onFileRenamed, onF
       )}
     </div>
   );
-};
+});
 
 export default FileExplorer;
